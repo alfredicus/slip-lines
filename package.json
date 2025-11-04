@@ -5,9 +5,7 @@
   "main": "SlipLinesVisualization.tsx",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "tsc && vite build && gh-pages -d dist"
   },
   "dependencies": {
     "react": "^18.2.0",

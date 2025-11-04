@@ -4,27 +4,31 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 5173,
-    open: true,
-    host: true,
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: false,
-    minify: 'terser',
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          three: ['three'],
+    plugins: [react()],
+    base: '/slip-lines/',
+    server: {
+        port: 5173,
+        open: true,
+        host: true,
+    },
+    optimizeDeps: {
+        include: ['three', 'three/examples/jsm/controls/TrackballControls.js']
+    },
+    build: {
+        outDir: 'dist',
+        sourcemap: false,
+        minify: 'terser',
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    three: ['three'],
+                },
+            },
         },
-      },
     },
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    resolve: {
+        alias: {
+            '@': path.resolve(__dirname, './src'),
+        },
     },
-  },
 });
