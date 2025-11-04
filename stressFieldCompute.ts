@@ -55,6 +55,29 @@ const DEFAULT_N_CURVES = 12;
 const DEFAULT_N_ISO = 8;
 const DEFAULT_CURVE_RESOLUTION = 200;
 
+export function getEquipotentialPoint(
+    at: Point3D,
+    lambda_x: number,
+    lambda_y: number,
+    lambda_z: number,
+): number {
+    const x = at.x;
+    const y = at.y;
+    const z = at.z;
+
+    // Convert Cartesian to spherical
+    const r = Math.sqrt(x * x + y * y + z * z);
+    const theta_rad = Math.acos(Math.max(-1, Math.min(1, z / r)));
+    let phi_rad = Math.atan2(y, x);
+    if (phi_rad < 0) phi_rad += 2 * Math.PI;
+
+    const theta_deg = (theta_rad * 180) / Math.PI;
+    const phi_deg = (phi_rad * 180) / Math.PI;
+
+    // Calculate normal stress at this point
+    return calculateNormalStress(phi_deg, theta_deg, lambda_x, lambda_y, lambda_z);
+}
+
 // ============================================================================
 // COORDINATE TRANSFORMATIONS
 // ============================================================================
@@ -476,6 +499,7 @@ export function generateSlipLines(
 // ============================================================================
 // EQUIPOTENTIAL GENERATION
 // ============================================================================
+
 
 /**
  * Generate equipotential curves (iso-normal stress)

@@ -12,7 +12,12 @@ import {
     EquipotentialCurve,
     SlipLineCurve,
     PrincipalAxis,
+    getEquipotentialPoint,
 } from './stressFieldCompute';
+import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from './keplerlit/attributes';
+import { createLut } from './keplerlit/colorMap';
+import { fromValueToColor, minMax } from './keplerlit/utils';
+import { Color } from './keplerlit/Color';
 
 /**
      * Compute S2 (intermediate principal stress) from S1, S3, and stress ratio R
@@ -82,6 +87,7 @@ const SlipLinesVisualization: React.FC = () => {
     const sceneRef = useRef<THREE.Scene | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+    const sphereGeometryRef = useRef<THREE.SphereGeometry | null>(null);
     const sphereGroupRef = useRef<THREE.Group>(new THREE.Group());
 
     // -------------------------------------------------------------------------
@@ -147,12 +153,15 @@ const SlipLinesVisualization: React.FC = () => {
         // SPHERE MESH
         // -----------------------------------------------------------------------
 
-        const sphereGeometry = new THREE.SphereGeometry(1, 64, 64);
+        const sphereGeometry = new THREE.SphereGeometry(1, 256, 256);
+        sphereGeometryRef.current = sphereGeometry;
+
         const sphereMaterial = new THREE.MeshPhongMaterial({
             color: 0xffffff,
             wireframe: false,
             opacity: SPHERE_OPACITY,
-            transparent: true
+            transparent: true,
+            vertexColors: true
         });
         const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
         scene.add(sphere);
@@ -280,6 +289,74 @@ const SlipLinesVisualization: React.FC = () => {
             );
             addAxesToScene(axes, sphereGroupRef.current);
         }
+
+        // Update sphere iso-contours here
+        if (sphereGeometryRef.current) {
+            const geom = sphereGeometryRef.current
+            const position = geom.attributes.position
+            const attribute: THREE.BufferAttribute = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
+            if (!attribute) {
+                const equipotentialValues = new Float32Array(position.count * 3);
+                geom.setAttribute('equipotentialValue', new THREE.BufferAttribute(equipotentialValues, 1));
+            }
+            const equipotentialValues = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
+
+            const attr: number[] = []
+            for (let i = 0; i < position.count; i++) {
+                const x = position.getX(i);
+                const y = position.getY(i);
+                const z = position.getZ(i);
+                const v = getEquipotentialPoint(
+                    { x, y, z },
+                    controls.S1,
+                    computeS2(controls.S1, controls.S3, controls.R),
+                    controls.S3
+                );
+                attr.push(v);
+            }
+            const mm = minMax(attr)
+            const normalizeAttr = (v: number) => (v - mm[0]) / (mm[1] - mm[0])
+
+            const lutTable = createLut("Banded", 512)
+            lutTable.setMin(mm[0])
+            lutTable.setMax(mm[1])
+
+            const colors: number[] = []
+
+            attr.forEach((v, i) => {
+                const c = fromValueToColor(normalizeAttr(v), {
+                    min: mm[0],
+                    max: mm[1],
+                    defaultColor: new Color("#ffffff"),
+                    lutTable
+                })
+                colors.push(...c)
+            })
+            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+
+            geom.getAttribute("color").needsUpdate = true;
+
+            // Update isos
+            const positionsArray = geom.attributes.position.array
+            const indicesArray = geom.index?.array
+
+            if (!indicesArray) {
+                return
+            }
+
+            const keplerPositions = new Float32BufferAttribute(Array.from(positionsArray), 3)
+            const keplerIndices = new Uint32BufferAttribute(Array.from(indicesArray), 1)
+
+            const keplerGeometry = new BufferGeometry()
+            keplerGeometry.setPositions(keplerPositions)
+            keplerGeometry.setIndices(keplerIndices)
+
+            // Calculate contour levels
+            // const minVal = Math.min(...scalarField)
+            // const maxVal = Math.max(...scalarField)
+        }
+
+
     }, [
         controls.S1,
         controls.S3,
