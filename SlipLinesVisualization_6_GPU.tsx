@@ -1,19 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
 import {
-    generateEquipotentials,
+    generateEquipotentialsBinary,
+    generateEquipotentialsParametric,
+    generateEquipotentialsParametricGPU,
+    generateSpecialEquipotentialMeridian,
+    generateSpecialEquipotentialMeridianGPU,
     generateSlipLines,
     generatePrincipalAxes,
+    getEquipotentialPoint,
     EquipotentialCurve,
+    CurveWithReflections,
     SlipLineCurve,
     PrincipalAxis,
-    getEquipotentialPoint,
-} from './stressFieldCompute_1';
+} from './stressFieldCompute_6_GPU';
 import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from './keplerlit/attributes';
 import { createLut } from './keplerlit/colorMap';
 import { fromValueToColor, minMax } from './keplerlit/utils';
@@ -30,8 +35,13 @@ interface ControlState {
     showEquipotential: boolean;
     showSlipLines: boolean;
     showStressAxes: boolean;
+    showSpecialEquipotential: boolean;
     slipLineColor: string;
     equipotentialColor: string;
+    specialEquipotentialColor: string;
+    useParametricEquipotentials: boolean;
+    nCurves: number;
+    nIsoCurves: number;
 }
 
 const INITIAL_CONTROLS: ControlState = {
@@ -41,11 +51,15 @@ const INITIAL_CONTROLS: ControlState = {
     showEquipotential: true,
     showSlipLines: true,
     showStressAxes: true,
+    showSpecialEquipotential: false,
     slipLineColor: '#D62728',
-    equipotentialColor: '#1F77B4'
+    equipotentialColor: '#1F77B4',
+    specialEquipotentialColor: '#FF00FF',
+    useParametricEquipotentials: false,
+    nCurves: 12,
+    nIsoCurves: 8
 };
 
-const COMPUTE_CONFIG = { nCurves: 12, nIsoCurves: 8, curveResolution: 500 };
 const CAMERA_INITIAL_POS = { x: 3, y: 3, z: 3 };
 const SPHERE_OPACITY = 1;
 const AXES_SIZE = 0.8;
@@ -164,23 +178,31 @@ const SlipLinesVisualization: React.FC = () => {
 
         if (controls.showEquipotential) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
-            const equipotentials = generateEquipotentials(
-                controls.S1,    // lambda_x
-                controls.S3,    // lambda_y ← SWAPPED
-                S2,             // lambda_z ← SWAPPED
-                COMPUTE_CONFIG
-            );
-            addLinesToScene(equipotentials, controls.equipotentialColor, sphereGroupRef.current, false);
+            const config = { nCurves: controls.nCurves, nIsoCurves: controls.nIsoCurves, curveResolution: 500 };
+            
+            // Use GPU version - returns curves with reflection metadata
+            const equipotentials = generateEquipotentialsParametricGPU(controls.S1, controls.S3, S2, config);
+            
+            // Filter out σ₂ if special equipotential will be plotted
+            const filtered = controls.showSpecialEquipotential
+                ? equipotentials.filter(curve => Math.abs(curve.iso_level - S2) > 1e-6)
+                : equipotentials;
+            
+            addLinesToSceneGPU(filtered, controls.equipotentialColor, sphereGroupRef.current, false);
+        }
+
+        if (controls.showSpecialEquipotential) {
+            const S2 = computeS2(controls.S1, controls.S3, controls.R);
+            const config = { curveResolution: 500 };
+            // Use GPU version - returns array with reflection metadata
+            const specialMeridians = generateSpecialEquipotentialMeridianGPU(controls.S1, controls.S3, S2, config);
+            addLinesToSceneGPU(specialMeridians, controls.specialEquipotentialColor, sphereGroupRef.current, false, true);
         }
 
         if (controls.showSlipLines) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
-            const slipLines = generateSlipLines(
-                controls.S1,    // lambda_x (σ1 - minimum)
-                controls.S3,    // lambda_y (σ3 - maximum) ← SWAPPED
-                S2,             // lambda_z (σ2 - intermediate) ← SWAPPED
-                COMPUTE_CONFIG
-            );
+            const config = { nCurves: controls.nCurves, nIsoCurves: controls.nIsoCurves, curveResolution: 500 };
+            const slipLines = generateSlipLines(controls.S1, controls.S3, S2, config);
             addLinesToScene(slipLines, controls.slipLineColor, sphereGroupRef.current, true);
         }
 
@@ -188,8 +210,8 @@ const SlipLinesVisualization: React.FC = () => {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const axes = generatePrincipalAxes(
                 controls.S1,    // sigma_x (σ1)
-                controls.S3,    // sigma_z (σ3) ← SWAPPED
-                S2              // sigma_y (σ2) ← SWAPPED
+                controls.S3,    // sigma_z (σ3)
+                S2              // sigma_y (σ2)
             );
             addAxesToScene(axes, sphereGroupRef.current);
         }
@@ -248,8 +270,13 @@ const SlipLinesVisualization: React.FC = () => {
         controls.showEquipotential,
         controls.showSlipLines,
         controls.showStressAxes,
+        controls.showSpecialEquipotential,
         controls.slipLineColor,
-        controls.equipotentialColor
+        controls.equipotentialColor,
+        controls.specialEquipotentialColor,
+        controls.useParametricEquipotentials,
+        controls.nCurves,
+        controls.nIsoCurves
     ]);
 
     // =========================================================================
@@ -260,58 +287,47 @@ const SlipLinesVisualization: React.FC = () => {
         curves: EquipotentialCurve[] | SlipLineCurve[],
         color: string,
         group: THREE.Group,
-        isSlipLine: boolean
+        isSlipLine: boolean,
+        isSpecial: boolean = false
     ): void => {
         let renderedCount = 0;
         
-        (curves as any[]).forEach((curve, idx) => {
+        (curves as any[]).forEach((curve) => {
             const x = (curve as any).x || [];
             const y = (curve as any).y || [];
             const z = (curve as any).z || [];
 
             if (x.length === 0 || y.length === 0 || z.length === 0) return;
-
-            // NEW: Debug curve 48
-            if (idx === 48) {
-                console.log(`Curve 48 details:`);
-                console.log(`  x[0]=${x[0]}, y[0]=${y[0]}, z[0]=${z[0]}`);
-                console.log(`  isSpecial=${(curve as SlipLineCurve).isSpecial}`);
-                console.log(`  specialType=${(curve as SlipLineCurve).specialType}`);
-                console.log(`  Total points: ${x.length}`);
-            }
-
             if (x.length !== y.length || y.length !== z.length) {
-                console.warn(`Curve ${idx}: Length mismatch`);
+                console.warn(`Curve: Length mismatch`);
                 return;
             }
 
             const positions: number[] = [];
+            const scale = 1.001;  // Offset to avoid Z-fighting with sphere
+            
             for (let i = 0; i < x.length; i++) {
                 if (!isFinite(x[i]) || !isFinite(y[i]) || !isFinite(z[i])) {
-                    if (idx === 48) {
-                        console.warn(`Curve 48 NaN: x=${x[i]}, y=${y[i]}, z=${z[i]}`);
-                    }
                     return;
                 }
                 
-                // Three.js expects:
-                // x = horizontal
-                // y = vertical ← THREE.js default
-                // z = horizontal
-                // Swap (x,y,z) to (y,z,x) equivalent to (North, Up, East) for display 
-                positions.push(y[i], z[i], x[i]); 
+                // Three.js expects: x = horizontal, y = vertical, z = horizontal
+                // Swap (x,y,z) to (y,z,x) equivalent to (North, Up, East) for display
+                positions.push(y[i] * scale, z[i] * scale, x[i] * scale); 
             }
 
             if (positions.length === 0) return;
 
-            const isSpecial = isSlipLine && (curve as SlipLineCurve).isSpecial === true;
-            const linewidth = isSpecial ? 10 : 6;
+            const linewidth = isSpecial ? 10 : (isSlipLine ? 6 : 4);
 
             const lineGeometry = new LineGeometry().setPositions(positions);
             const lineMaterial = new LineMaterial({
                 color: new THREE.Color(color),
                 linewidth: linewidth,
-                resolution: new THREE.Vector2(1, 1)
+                resolution: new THREE.Vector2(
+                    rendererRef.current!.domElement.clientWidth,
+                    rendererRef.current!.domElement.clientHeight
+                )
             });
             const lineObj = new LineSegments2(lineGeometry, lineMaterial);
             group.add(lineObj);
@@ -322,14 +338,74 @@ const SlipLinesVisualization: React.FC = () => {
         console.log(`Rendered ${renderedCount} curves`);
     };
 
+    const addLinesToSceneGPU = (
+        curves: CurveWithReflections[],
+        color: string,
+        group: THREE.Group,
+        isSlipLine: boolean,
+        isSpecial: boolean = false
+    ): void => {
+        let renderedCount = 0;
+        
+        curves.forEach((curve) => {
+            const x = curve.x || [];
+            const y = curve.y || [];
+            const z = curve.z || [];
+
+            if (x.length === 0 || y.length === 0 || z.length === 0) return;
+
+            // Create base geometry (positive octant only)
+            const positions: number[] = [];
+            const scale = 1.001;
+            
+            for (let i = 0; i < x.length; i++) {
+                if (!isFinite(x[i]) || !isFinite(y[i]) || !isFinite(z[i])) {
+                    return;
+                }
+                positions.push(y[i] * scale, z[i] * scale, x[i] * scale);
+            }
+
+            if (positions.length === 0) return;
+
+            const linewidth = isSpecial ? 10 : (isSlipLine ? 6 : 4);
+            const lineGeometry = new LineGeometry().setPositions(positions);
+
+            // Apply each reflection with GPU matrix transform
+            const reflections = curve.reflections || [{ sx: 1, sy: 1, sz: 1 }];
+            
+            for (const { sx, sy, sz } of reflections) {
+                const lineMaterial = new LineMaterial({
+                    color: new THREE.Color(color),
+                    linewidth: linewidth,
+                    resolution: new THREE.Vector2(
+                        rendererRef.current!.domElement.clientWidth,
+                        rendererRef.current!.domElement.clientHeight
+                    )
+                });
+                const lineObj = new LineSegments2(lineGeometry, lineMaterial);
+                
+                // Apply matrix transform for reflection
+                const matrix = new THREE.Matrix4();
+                matrix.scale(new THREE.Vector3(sx, sy, sz));
+                lineObj.matrix = matrix;
+                lineObj.matrixAutoUpdate = false;
+                
+                group.add(lineObj);
+                renderedCount++;
+            }
+        });
+        
+        console.log(`Rendered ${renderedCount} GPU reflected curves`);
+    };
+
     const addAxesToScene = (axes: PrincipalAxis[], group: THREE.Group): void => {
         axes.forEach((axis) => {
             const geometry = new THREE.BufferGeometry();
             const positions = [
                 0, 0, 0,
-                axis.axis.y * 1.5,   // ← North
-                axis.axis.z * 1.5,   // ← Up
-                axis.axis.x * 1.5    // ← East
+                axis.axis.y * 1.5,   // North
+                axis.axis.z * 1.5,   // Up
+                axis.axis.x * 1.5    // East
             ];
 
             geometry.setAttribute(
@@ -415,7 +491,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
     return (
         <div
             style={{
-                width: 350,
+                width: 380,
                 padding: 20,
                 backgroundColor: '#f5f5f5',
                 borderLeft: '1px solid #ddd',
@@ -425,6 +501,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
             <h2 style={{ marginTop: 0, fontSize: 18, fontWeight: 'bold' }}>
                 3D Slip Lines & Equipotentials
             </h2>
+
+            {/* ================================================================ */}
+            {/* PRINCIPAL STRESSES SECTION */}
+            {/* ================================================================ */}
 
             <div style={{ marginBottom: 25 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
@@ -468,6 +548,69 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 </div>
             </div>
 
+            {/* ================================================================ */}
+            {/* COMPUTATION PARAMETERS SECTION */}
+            {/* ================================================================ */}
+
+            <div style={{ marginBottom: 25 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
+                    Computation Settings
+                </h3>
+
+                <div style={{ marginBottom: 15 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: 13, marginBottom: 8 }}>
+                        <input
+                            type="checkbox"
+                            checked={controls.useParametricEquipotentials}
+                            onChange={(e) => onControlChange('useParametricEquipotentials', e.target.checked)}
+                            style={{ marginRight: 8, width: 16, height: 16, cursor: 'pointer' }}
+                        />
+                        <span>Use Parametric Equipotentials</span>
+                    </label>
+                    <small style={{ color: '#999', fontSize: 11, marginLeft: 24 }}>
+                        {controls.useParametricEquipotentials 
+                            ? 'Improved method using Mohr circle parametrization' 
+                            : 'Binary search method (stable baseline)'}
+                    </small>
+                </div>
+
+                <div style={{ marginBottom: 15 }}>
+                    <label style={{ display: 'block', marginBottom: 5, fontSize: 13 }}>
+                        # Slip Lines: {controls.nCurves}
+                    </label>
+                    <input
+                        type="range"
+                        min="4"
+                        max="20"
+                        step="1"
+                        value={controls.nCurves}
+                        onChange={(e) => onControlChange('nCurves', parseInt(e.target.value))}
+                        style={{ width: '100%', cursor: 'pointer' }}
+                    />
+                    <small style={{ color: '#999', fontSize: 11 }}>More curves = denser visualization</small>
+                </div>
+
+                <div style={{ marginBottom: 15 }}>
+                    <label style={{ display: 'block', marginBottom: 5, fontSize: 13 }}>
+                        # Equipotentials: {controls.nIsoCurves}
+                    </label>
+                    <input
+                        type="range"
+                        min="4"
+                        max="16"
+                        step="1"
+                        value={controls.nIsoCurves}
+                        onChange={(e) => onControlChange('nIsoCurves', parseInt(e.target.value))}
+                        style={{ width: '100%', cursor: 'pointer' }}
+                    />
+                    <small style={{ color: '#999', fontSize: 11 }}>More levels = finer stress detail</small>
+                </div>
+            </div>
+
+            {/* ================================================================ */}
+            {/* VISUALIZATION TOGGLES SECTION */}
+            {/* ================================================================ */}
+
             <div style={{ marginBottom: 25 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
                     Visualization
@@ -481,6 +624,17 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                     <ColorPicker
                         value={controls.equipotentialColor}
                         onChange={(val) => onControlChange('equipotentialColor', val)}
+                    />
+                </ToggleControl>
+
+                <ToggleControl
+                    label="Show Special Equipotential (σ₂)"
+                    checked={controls.showSpecialEquipotential}
+                    onChange={(val) => onControlChange('showSpecialEquipotential', val)}
+                >
+                    <ColorPicker
+                        value={controls.specialEquipotentialColor}
+                        onChange={(val) => onControlChange('specialEquipotentialColor', val)}
                     />
                 </ToggleControl>
 
@@ -502,19 +656,26 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 />
             </div>
 
+            {/* ================================================================ */}
+            {/* CONTROLS INFO SECTION */}
+            {/* ================================================================ */}
+
             <div style={{
                 fontSize: 12,
                 color: '#666',
                 borderTop: '1px solid #ddd',
                 paddingTop: 15
             }}>
-                <p style={{ margin: '0 0 8px 0', fontWeight: 'bold' }}>Controls:</p>
+                <p style={{ margin: '0 0 8px 0', fontWeight: 'bold' }}>Mouse Controls:</p>
                 <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
                     <li>Left drag: Rotate</li>
                     <li>Middle drag: Zoom</li>
                     <li>Right drag: Pan</li>
                     <li>Scroll: Zoom</li>
                 </ul>
+                <p style={{ margin: '12px 0 8px 0', fontSize: 11, color: '#999', fontStyle: 'italic' }}>
+                    Open browser console (F12) to see computation logs
+                </p>
             </div>
         </div>
     );

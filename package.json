@@ -1,8 +1,8 @@
 {
-  "name": "slip-lines-visualization",
+  "name": "slip-lines-visualization_5_CPU",
   "version": "1.0.0",
   "description": "3D Slip Lines and Equipotentials Visualization with Three.js and React",
-  "main": "SlipLinesVisualization.tsx",
+  "main": "SlipLinesVisualization_5_CPU.tsx",
   "scripts": {
     "dev": "vite",
     "deploy": "tsc && vite build && gh-pages -d dist"

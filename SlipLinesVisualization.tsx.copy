@@ -13,20 +13,35 @@ import {
     SlipLineCurve,
     PrincipalAxis,
     getEquipotentialPoint,
-} from './stressFieldCompute_1';
+} from './stressFieldCompute';
 import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from './keplerlit/attributes';
 import { createLut } from './keplerlit/colorMap';
 import { fromValueToColor, minMax } from './keplerlit/utils';
 import { Color } from './keplerlit/Color';
 
+/**
+     * Compute S2 (intermediate principal stress) from S1, S3, and stress ratio R
+     * 
+     * Formula: R = (S2 - S3) / (S1 - S3)
+     * Solving for S2: S2 = S3 + R * (S1 - S3)
+     * 
+     * @param S1 - Minimum principal stress (most compressive)
+     * @param S3 - Maximum principal stress (most extensional)
+     * @param R - Stress ratio [0, 1]
+     * @returns S2 - Intermediate principal stress
+     */
 const computeS2 = (S1: number, S3: number, R: number): number => {
     return S3 + R * (S1 - S3);
 };
 
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
 interface ControlState {
-    S1: number;
-    S3: number;
-    R: number;
+    S1: number;           // Minimum principal stress (most compressive)
+    S3: number;           // Maximum principal stress (most extensional)
+    R: number;            // Stress ratio: R = (S2-S3)/(S1-S3), between 0 and 1
     showEquipotential: boolean;
     showSlipLines: boolean;
     showStressAxes: boolean;
@@ -34,10 +49,14 @@ interface ControlState {
     equipotentialColor: string;
 }
 
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
 const INITIAL_CONTROLS: ControlState = {
-    S1: 1.0,
-    S3: 3.0,
-    R: 0.5,
+    S1: 1.0,              // Minimum principal stress
+    S3: 3.0,              // Maximum principal stress
+    R: 0.5,               // Stress ratio (0 to 1)
     showEquipotential: true,
     showSlipLines: true,
     showStressAxes: true,
@@ -45,19 +64,41 @@ const INITIAL_CONTROLS: ControlState = {
     equipotentialColor: '#1F77B4'
 };
 
-const COMPUTE_CONFIG = { nCurves: 12, nIsoCurves: 8, curveResolution: 500 };
+const COMPUTE_CONFIG = {
+    nCurves: 12,
+    nIsoCurves: 8,
+    curveResolution: 500
+};
+
 const CAMERA_INITIAL_POS = { x: 3, y: 3, z: 3 };
 const SPHERE_OPACITY = 1;
 const AXES_SIZE = 0.8;
 
+// ============================================================================
+// REACT COMPONENT
+// ============================================================================
+
 const SlipLinesVisualization: React.FC = () => {
+    // -------------------------------------------------------------------------
+    // REFS
+    // -------------------------------------------------------------------------
+
     const containerRef = useRef<HTMLDivElement>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const sphereGeometryRef = useRef<THREE.SphereGeometry | null>(null);
     const sphereGroupRef = useRef<THREE.Group>(new THREE.Group());
+
+    // -------------------------------------------------------------------------
+    // STATE
+    // -------------------------------------------------------------------------
+
     const [controls, setControls] = useState<ControlState>(INITIAL_CONTROLS);
+
+    // -------------------------------------------------------------------------
+    // EVENT HANDLERS
+    // -------------------------------------------------------------------------
 
     const handleControlChange = <K extends keyof ControlState>(
         key: K,
@@ -66,17 +107,19 @@ const SlipLinesVisualization: React.FC = () => {
         setControls((prev) => ({ ...prev, [key]: value }));
     };
 
-    // =========================================================================
-    // SCENE INITIALIZATION
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // THREE.JS SCENE INITIALIZATION
+    // -------------------------------------------------------------------------
 
     useEffect(() => {
         if (!containerRef.current) return;
 
+        // Create scene
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0xaaaaaa);
         sceneRef.current = scene;
 
+        // Create camera
         const width = containerRef.current.clientWidth;
         const height = containerRef.current.clientHeight;
         const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
@@ -84,11 +127,16 @@ const SlipLinesVisualization: React.FC = () => {
         camera.lookAt(0, 0, 0);
         cameraRef.current = camera;
 
+        // Create renderer
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(width, height);
         renderer.setPixelRatio(window.devicePixelRatio);
         containerRef.current.appendChild(renderer.domElement);
         rendererRef.current = renderer;
+
+        // -----------------------------------------------------------------------
+        // LIGHTING
+        // -----------------------------------------------------------------------
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 2);
         scene.add(ambientLight);
@@ -100,6 +148,10 @@ const SlipLinesVisualization: React.FC = () => {
         const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.99);
         directionalLight2.position.set(-5, -5, -5);
         scene.add(directionalLight2);
+
+        // -----------------------------------------------------------------------
+        // SPHERE MESH
+        // -----------------------------------------------------------------------
 
         const sphereGeometry = new THREE.SphereGeometry(1, 256, 256);
         sphereGeometryRef.current = sphereGeometry;
@@ -114,28 +166,52 @@ const SlipLinesVisualization: React.FC = () => {
         const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
         scene.add(sphere);
 
+        // -----------------------------------------------------------------------
+        // COORDINATE AXES HELPER
+        // -----------------------------------------------------------------------
+
         const axesHelper = new THREE.AxesHelper(AXES_SIZE);
         scene.add(axesHelper);
+
+        // Add the group for curves
         scene.add(sphereGroupRef.current);
 
-        const trackballControls = new TrackballControls(camera, renderer.domElement);
-        trackballControls.rotateSpeed = 1.0;
-        trackballControls.zoomSpeed = 1.2;
-        trackballControls.panSpeed = 0.8;
-        trackballControls.target.set(0, 0, 0);
+        // -----------------------------------------------------------------------
+        // TRACKBALL CONTROLS
+        // -----------------------------------------------------------------------
+
+        const controls = new TrackballControls(camera, renderer.domElement);
+        controls.rotateSpeed = 1.0;
+        controls.zoomSpeed = 1.2;
+        controls.panSpeed = 0.8;
+        controls.noRotate = false;
+        controls.noZoom = false;
+        controls.noPan = false;
+        controls.autoRotate = false;
+        controls.target.set(0, 0, 0);
+
+        // -----------------------------------------------------------------------
+        // ANIMATION LOOP
+        // -----------------------------------------------------------------------
 
         let animationId: number;
         const animate = (): void => {
             animationId = requestAnimationFrame(animate);
-            trackballControls.update();
+            controls.update();
             renderer.render(scene, camera);
         };
         animate();
 
+        // -----------------------------------------------------------------------
+        // WINDOW RESIZE HANDLER
+        // -----------------------------------------------------------------------
+
         const handleResize = (): void => {
             if (!containerRef.current || !cameraRef.current) return;
+
             const newWidth = containerRef.current.clientWidth;
             const newHeight = containerRef.current.clientHeight;
+
             cameraRef.current.aspect = newWidth / newHeight;
             cameraRef.current.updateProjectionMatrix();
             renderer.setSize(newWidth, newHeight);
@@ -143,11 +219,17 @@ const SlipLinesVisualization: React.FC = () => {
 
         window.addEventListener('resize', handleResize);
 
+        // -----------------------------------------------------------------------
+        // CLEANUP
+        // -----------------------------------------------------------------------
+
         return () => {
             window.removeEventListener('resize', handleResize);
-            trackballControls.dispose();
+
+            controls.dispose();
             cancelAnimationFrame(animationId);
             renderer.dispose();
+
             if (containerRef.current?.contains(renderer.domElement)) {
                 containerRef.current.removeChild(renderer.domElement);
             }
@@ -155,58 +237,76 @@ const SlipLinesVisualization: React.FC = () => {
     }, []);
 
     // =========================================================================
-    // VISUALIZATION UPDATE
+    // VISUALIZATION UPDATE - Compute and render curves
     // =========================================================================
 
     useEffect(() => {
         if (!sphereGroupRef.current) return;
+
+        // Clear previous geometry
         sphereGroupRef.current.clear();
+
+        // -----------------------------------------------------------------------
+        // GENERATE AND ADD EQUIPOTENTIALS
+        // -----------------------------------------------------------------------
 
         if (controls.showEquipotential) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const equipotentials = generateEquipotentials(
-                controls.S1,    // lambda_x
-                controls.S3,    // lambda_y ← SWAPPED
-                S2,             // lambda_z ← SWAPPED
+                controls.S1,    // lambda_x (sigma1 - minimum/most compressive)
+                S2,             // lambda_y (sigma2 - intermediate, computed from R)
+                controls.S3,    // lambda_z (sigma3 - maximum/most extensional)
                 COMPUTE_CONFIG
             );
-            addLinesToScene(equipotentials, controls.equipotentialColor, sphereGroupRef.current, false);
+            addLinesToScene(equipotentials, controls.equipotentialColor, sphereGroupRef.current);
         }
+
+        // -----------------------------------------------------------------------
+        // GENERATE AND ADD SLIP LINES
+        // -----------------------------------------------------------------------
 
         if (controls.showSlipLines) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const slipLines = generateSlipLines(
-                controls.S1,    // lambda_x (σ1 - minimum)
-                controls.S3,    // lambda_y (σ3 - maximum) ← SWAPPED
-                S2,             // lambda_z (σ2 - intermediate) ← SWAPPED
+                controls.S1,    // lambda_x (sigma1 - minimum/most compressive)
+                S2,             // lambda_y (sigma2 - intermediate, computed from R)
+                controls.S3,    // lambda_z (sigma3 - maximum/most extensional)
                 COMPUTE_CONFIG
             );
-            addLinesToScene(slipLines, controls.slipLineColor, sphereGroupRef.current, true);
+            addLinesToScene(slipLines, controls.slipLineColor, sphereGroupRef.current);
         }
+
+        // -----------------------------------------------------------------------
+        // GENERATE AND ADD PRINCIPAL STRESS AXES
+        // -----------------------------------------------------------------------
 
         if (controls.showStressAxes) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const axes = generatePrincipalAxes(
-                controls.S1,    // sigma_x (σ1)
-                controls.S3,    // sigma_z (σ3) ← SWAPPED
-                S2              // sigma_y (σ2) ← SWAPPED
+                controls.S1,    // sigma1 - minimum/most compressive
+                S2,             // sigma2 - intermediate, computed from R
+                controls.S3     // sigma3 - maximum/most extensional
             );
             addAxesToScene(axes, sphereGroupRef.current);
         }
 
-        // Update sphere coloring
+        // ===============================================================================
+        // TODO: iso contouring on sphere based on equipotential values
+        // Update sphere iso-contours here
+        // ===============================================================================
         if (sphereGeometryRef.current) {
-            const geom = sphereGeometryRef.current;
-            const position = geom.attributes.position;
-            
-            let attribute: THREE.BufferAttribute | null = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
+            const geom = sphereGeometryRef.current
+            const position = geom.attributes.position
+            const attribute: THREE.BufferAttribute = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
             if (!attribute) {
-                const equipotentialValues = new Float32Array(position.count);
+                const equipotentialValues = new Float32Array(position.count * 3);
                 geom.setAttribute('equipotentialValue', new THREE.BufferAttribute(equipotentialValues, 1));
-                attribute = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
             }
+            const equipotentialValues = geom.getAttribute('equipotentialValue') as THREE.BufferAttribute;
 
-            const attr: number[] = [];
+            // attr: number[] -> colors: number[] -> update geom colors
+
+            const attr: number[] = []
             for (let i = 0; i < position.count; i++) {
                 const x = position.getX(i);
                 const y = position.getY(i);
@@ -219,27 +319,48 @@ const SlipLinesVisualization: React.FC = () => {
                 );
                 attr.push(v);
             }
+            const mm = minMax(attr)
+            const normalizeAttr = (v: number) => (v - mm[0]) / (mm[1] - mm[0])
 
-            const mm = minMax(attr);
-            const normalizeAttr = (v: number) => (v - mm[0]) / (mm[1] - mm[0]);
-            const lutTable = createLut("Igeoss", 512);
-            lutTable.setMin(mm[0]);
-            lutTable.setMax(mm[1]);
+            const lutTable = createLut("Igeoss", 512)
+            lutTable.setMin(mm[0])
+            lutTable.setMax(mm[1])
 
-            const colors: number[] = [];
-            attr.forEach((v) => {
+            const colors: number[] = []
+
+            attr.forEach((v, i) => {
                 const c = fromValueToColor(normalizeAttr(v), {
                     min: mm[0],
                     max: mm[1],
                     defaultColor: new Color("#ffffff"),
                     lutTable
-                });
-                colors.push(...c);
-            });
+                })
+                colors.push(...c)
+            })
 
-            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
             geom.getAttribute("color").needsUpdate = true;
+
+            // Update isos
+            const positionsArray = geom.attributes.position.array
+            const indicesArray = geom.index?.array
+
+            if (!indicesArray) {
+                return
+            }
+
+            const keplerPositions = new Float32BufferAttribute(Array.from(positionsArray), 3)
+            const keplerIndices = new Uint32BufferAttribute(Array.from(indicesArray), 1)
+
+            const keplerGeometry = new BufferGeometry()
+            keplerGeometry.setPositions(keplerPositions)
+            keplerGeometry.setIndices(keplerIndices)
+
+            // Calculate contour levels
+            // const minVal = Math.min(...scalarField)
+            // const maxVal = Math.max(...scalarField)
         }
+
 
     }, [
         controls.S1,
@@ -253,83 +374,71 @@ const SlipLinesVisualization: React.FC = () => {
     ]);
 
     // =========================================================================
-    // HELPER FUNCTIONS
+    // HELPER FUNCTIONS - THREE.JS GEOMETRY CREATION
     // =========================================================================
 
+    /**
+     * Add curve lines to the Three.js scene
+     * Handles both equipotential curves and slip lines
+     */
     const addLinesToScene = (
         curves: EquipotentialCurve[] | SlipLineCurve[],
         color: string,
-        group: THREE.Group,
-        isSlipLine: boolean
+        group: THREE.Group
     ): void => {
-        let renderedCount = 0;
-        
-        (curves as any[]).forEach((curve, idx) => {
+        (curves as any[]).forEach((curve) => {
+            // Extract coordinates from curve
             const x = (curve as any).x || [];
             const y = (curve as any).y || [];
             const z = (curve as any).z || [];
 
             if (x.length === 0 || y.length === 0 || z.length === 0) return;
+            if (x.length !== y.length || y.length !== z.length) return;
 
-            // NEW: Debug curve 48
-            if (idx === 48) {
-                console.log(`Curve 48 details:`);
-                console.log(`  x[0]=${x[0]}, y[0]=${y[0]}, z[0]=${z[0]}`);
-                console.log(`  isSpecial=${(curve as SlipLineCurve).isSpecial}`);
-                console.log(`  specialType=${(curve as SlipLineCurve).specialType}`);
-                console.log(`  Total points: ${x.length}`);
-            }
-
-            if (x.length !== y.length || y.length !== z.length) {
-                console.warn(`Curve ${idx}: Length mismatch`);
-                return;
-            }
-
+            // Create Three.js geometry
+            const geometry = new THREE.BufferGeometry();
             const positions: number[] = [];
+
             for (let i = 0; i < x.length; i++) {
-                if (!isFinite(x[i]) || !isFinite(y[i]) || !isFinite(z[i])) {
-                    if (idx === 48) {
-                        console.warn(`Curve 48 NaN: x=${x[i]}, y=${y[i]}, z=${z[i]}`);
-                    }
-                    return;
-                }
-                
-                // Three.js expects:
-                // x = horizontal
-                // y = vertical ← THREE.js default
-                // z = horizontal
-                // Swap (x,y,z) to (y,z,x) equivalent to (North, Up, East) for display 
-                positions.push(y[i], z[i], x[i]); 
+                positions.push(x[i], y[i], z[i]);
             }
 
-            if (positions.length === 0) return;
+            geometry.setAttribute(
+                'position',
+                new THREE.BufferAttribute(new Float32Array(positions), 3)
+            );
 
-            const isSpecial = isSlipLine && (curve as SlipLineCurve).isSpecial === true;
-            const linewidth = isSpecial ? 10 : 6;
+            // Create material and line
+            // const material = new THREE.LineBasicMaterial({
+            //     color: new THREE.Color(color),
+            //     fog: false
+            // });
 
+            // const lineObj = new THREE.Line(geometry, material);
             const lineGeometry = new LineGeometry().setPositions(positions);
             const lineMaterial = new LineMaterial({
                 color: new THREE.Color(color),
-                linewidth: linewidth,
+                linewidth: 5,
                 resolution: new THREE.Vector2(1, 1)
             });
             const lineObj = new LineSegments2(lineGeometry, lineMaterial);
             group.add(lineObj);
-            
-            renderedCount++;
         });
-        
-        console.log(`Rendered ${renderedCount} curves`);
     };
 
+    /**
+     * Add principal stress axes to the scene with arrow heads
+     */
     const addAxesToScene = (axes: PrincipalAxis[], group: THREE.Group): void => {
         axes.forEach((axis) => {
+            // ---------------------------------------------------------------
+            // MAIN AXIS LINE
+            // ---------------------------------------------------------------
+
             const geometry = new THREE.BufferGeometry();
             const positions = [
                 0, 0, 0,
-                axis.axis.y * 1.5,   // ← North
-                axis.axis.z * 1.5,   // ← Up
-                axis.axis.x * 1.5    // ← East
+                axis.axis.x * 1.5, axis.axis.y * 1.5, axis.axis.z * 1.5
             ];
 
             geometry.setAttribute(
@@ -346,14 +455,19 @@ const SlipLinesVisualization: React.FC = () => {
             const line = new THREE.Line(geometry, material);
             group.add(line);
 
-            const arrowDir = new THREE.Vector3(axis.axis.y, axis.axis.z, axis.axis.x).normalize();
+            // ---------------------------------------------------------------
+            // ARROW HEAD
+            // ---------------------------------------------------------------
+
+            const arrowDir = new THREE.Vector3(axis.axis.x, axis.axis.y, axis.axis.z).normalize();
             const arrowLength = 0.2;
             const arrowOrigin = new THREE.Vector3(
+                axis.axis.x * 1.5,
                 axis.axis.y * 1.5,
-                axis.axis.z * 1.5,
-                axis.axis.x * 1.5
+                axis.axis.z * 1.5
             );
 
+            // Get perpendicular vectors for arrow wings
             let perpDir1 = new THREE.Vector3()
                 .crossVectors(arrowDir, new THREE.Vector3(0, 0, 1))
                 .normalize();
@@ -366,12 +480,15 @@ const SlipLinesVisualization: React.FC = () => {
                 .crossVectors(arrowDir, perpDir1)
                 .normalize();
 
+            // Create arrow head geometry
             const arrowGeometry = new THREE.BufferGeometry();
             const arrowPositions = [
+                // First wing
                 arrowOrigin.x, arrowOrigin.y, arrowOrigin.z,
                 arrowOrigin.x - arrowDir.x * arrowLength + perpDir1.x * arrowLength * 0.3,
                 arrowOrigin.y - arrowDir.y * arrowLength + perpDir1.y * arrowLength * 0.3,
                 arrowOrigin.z - arrowDir.z * arrowLength + perpDir1.z * arrowLength * 0.3,
+                // Second wing
                 arrowOrigin.x, arrowOrigin.y, arrowOrigin.z,
                 arrowOrigin.x - arrowDir.x * arrowLength + perpDir2.x * arrowLength * 0.3,
                 arrowOrigin.y - arrowDir.y * arrowLength + perpDir2.y * arrowLength * 0.3,
@@ -388,8 +505,13 @@ const SlipLinesVisualization: React.FC = () => {
         });
     };
 
+    // =========================================================================
+    // RENDER
+    // =========================================================================
+
     return (
         <div style={{ display: 'flex', height: '100vh', fontFamily: 'Arial, sans-serif' }}>
+            {/* 3D Visualization */}
             <div
                 ref={containerRef}
                 style={{
@@ -397,6 +519,8 @@ const SlipLinesVisualization: React.FC = () => {
                     position: 'relative'
                 }}
             />
+
+            {/* Control Panel */}
             <ControlPanel controls={controls} onControlChange={handleControlChange} />
         </div>
     );
@@ -426,6 +550,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 3D Slip Lines & Equipotentials
             </h2>
 
+            {/* Stress Tensor Parameters Section */}
             <div style={{ marginBottom: 25 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
                     Principal Stresses
@@ -468,6 +593,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 </div>
             </div>
 
+            {/* Visualization Options Section */}
             <div style={{ marginBottom: 25 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
                     Visualization
@@ -502,6 +628,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 />
             </div>
 
+            {/* Info Section */}
             <div style={{
                 fontSize: 12,
                 color: '#666',

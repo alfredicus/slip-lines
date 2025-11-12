@@ -19,8 +19,7 @@ export function createIsoContoursFilled(geometry: BufferGeometry, attr: number[]
     min = undefined,
     max = undefined,
     lut = 'Rainbow',
-    nbColors = 128,
-
+    nbColors = 128
 }: { min?: number, max?: number, lut?: string, nbColors?: number } = {}): IsoFillReturnedType | undefined {
     const isoContours = new IsoContoursFilled(lut, nbColors, isoList)
     return isoContours.run(geometry, attr, min, max)
@@ -124,7 +123,7 @@ export class IsoContoursFilled {
     }
 
     private getNormal(i: number) {
-        return (this.nnormals_ as BufferAttribute ).get(i)
+        return (this.nnormals_ as BufferAttribute).get(i)
         // return [this.nnormals_.getX(i), this.nnormals_.getY(i), this.nnormals_.getZ(i)]
     }
 

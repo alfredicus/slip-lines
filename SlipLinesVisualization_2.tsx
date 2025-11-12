@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -9,11 +9,11 @@ import {
     generateEquipotentials,
     generateSlipLines,
     generatePrincipalAxes,
+    getEquipotentialPoint,
     EquipotentialCurve,
     SlipLineCurve,
     PrincipalAxis,
-    getEquipotentialPoint,
-} from './stressFieldCompute_1';
+} from './stressFieldCompute_2';
 import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from './keplerlit/attributes';
 import { createLut } from './keplerlit/colorMap';
 import { fromValueToColor, minMax } from './keplerlit/utils';
@@ -166,8 +166,8 @@ const SlipLinesVisualization: React.FC = () => {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const equipotentials = generateEquipotentials(
                 controls.S1,    // lambda_x
-                controls.S3,    // lambda_y ← SWAPPED
-                S2,             // lambda_z ← SWAPPED
+                controls.S3,    // lambda_y â† SWAPPED
+                S2,             // lambda_z â† SWAPPED
                 COMPUTE_CONFIG
             );
             addLinesToScene(equipotentials, controls.equipotentialColor, sphereGroupRef.current, false);
@@ -176,9 +176,9 @@ const SlipLinesVisualization: React.FC = () => {
         if (controls.showSlipLines) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const slipLines = generateSlipLines(
-                controls.S1,    // lambda_x (σ1 - minimum)
-                controls.S3,    // lambda_y (σ3 - maximum) ← SWAPPED
-                S2,             // lambda_z (σ2 - intermediate) ← SWAPPED
+                controls.S1,    // lambda_x (Ïƒ1 - minimum)
+                controls.S3,    // lambda_y (Ïƒ3 - maximum) â† SWAPPED
+                S2,             // lambda_z (Ïƒ2 - intermediate) â† SWAPPED
                 COMPUTE_CONFIG
             );
             addLinesToScene(slipLines, controls.slipLineColor, sphereGroupRef.current, true);
@@ -187,9 +187,9 @@ const SlipLinesVisualization: React.FC = () => {
         if (controls.showStressAxes) {
             const S2 = computeS2(controls.S1, controls.S3, controls.R);
             const axes = generatePrincipalAxes(
-                controls.S1,    // sigma_x (σ1)
-                controls.S3,    // sigma_z (σ3) ← SWAPPED
-                S2              // sigma_y (σ2) ← SWAPPED
+                controls.S1,    // sigma_x (Ïƒ1)
+                controls.S3,    // sigma_z (Ïƒ3) â† SWAPPED
+                S2              // sigma_y (Ïƒ2) â† SWAPPED
             );
             addAxesToScene(axes, sphereGroupRef.current);
         }
@@ -296,7 +296,7 @@ const SlipLinesVisualization: React.FC = () => {
                 
                 // Three.js expects:
                 // x = horizontal
-                // y = vertical ← THREE.js default
+                // y = vertical â† THREE.js default
                 // z = horizontal
                 // Swap (x,y,z) to (y,z,x) equivalent to (North, Up, East) for display 
                 positions.push(y[i], z[i], x[i]); 
@@ -327,9 +327,9 @@ const SlipLinesVisualization: React.FC = () => {
             const geometry = new THREE.BufferGeometry();
             const positions = [
                 0, 0, 0,
-                axis.axis.y * 1.5,   // ← North
-                axis.axis.z * 1.5,   // ← Up
-                axis.axis.x * 1.5    // ← East
+                axis.axis.y * 1.5,   // â† North
+                axis.axis.z * 1.5,   // â† Up
+                axis.axis.x * 1.5    // â† East
             ];
 
             geometry.setAttribute(
@@ -432,7 +432,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 </h3>
 
                 <StressSlider
-                    label="S₁ (σ₁ - minimum)"
+                    label="Sâ‚ (Ïƒâ‚ - minimum)"
                     value={controls.S1}
                     onChange={(val) => onControlChange('S1', val)}
                     min={-5}
@@ -441,7 +441,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                 />
 
                 <StressSlider
-                    label="S₃ (σ₃ - maximum)"
+                    label="Sâ‚ƒ (Ïƒâ‚ƒ - maximum)"
                     value={controls.S3}
                     onChange={(val) => onControlChange('S3', val)}
                     min={-5}
@@ -463,7 +463,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ controls, onControlChange }
                         style={{ width: '100%', cursor: 'pointer' }}
                     />
                     <small style={{ color: '#999', fontSize: 11 }}>
-                        R = (S₂ - S₃) / (S₁ - S₃), where S₂ = {computeS2(controls.S1, controls.S3, controls.R).toFixed(3)}
+                        R = (Sâ‚‚ - Sâ‚ƒ) / (Sâ‚ - Sâ‚ƒ), where Sâ‚‚ = {computeS2(controls.S1, controls.S3, controls.R).toFixed(3)}
                     </small>
                 </div>
             </div>
