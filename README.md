@@ -1,5 +1,9 @@
 # 3D Slip Lines & Equipotentials Visualization
 
+<p align="center">
+  <img src="screen.png" alt="Logo rosetta" width="300">
+</p>
+
 A modern React/TypeScript component using Three.js for visualizing theoretical slip lines, equipotential curves, and principal stress axes on a 3D sphere.
 
 <p align="center">
