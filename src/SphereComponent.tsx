@@ -16,16 +16,12 @@ import {
     SlipLineCurve,
     PrincipalAxis,
     Point3D,
-} from './stressFieldCompute_5_CPU';
-import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from './keplerlit/attributes';
-import { createLut, colorMapNames } from './keplerlit/colorMap';
-import { fromValueToColor, minMax } from './keplerlit/utils';
-import { Color } from './keplerlit/Color';
-import { createIsoContoursFilled, IsoFillReturnedType } from './keplerlit/IsoContoursFilled';
-import { sign } from 'three/tsl';
-import { createIsoContourLines } from './keplerlit/IsoContoursLines';
-import { ColorScale } from './keplerlit/ColorScale';
-import { GRADIENT_PRESETS, GradientBackground } from './keplerlit/GradientBackground';
+} from './sphere_utils';
+import { BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from '../keplerlit/attributes';
+import { colorMapNames } from '../keplerlit/colorMap';
+import { createIsoContoursFilled, IsoFillReturnedType } from '../keplerlit/IsoContoursFilled';
+import { createIsoContourLines } from '../keplerlit/IsoContoursLines';
+import { ColorScale } from '../keplerlit/ColorScale';
 
 const computeS2 = (S1: number, S3: number, R: number): number => {
     return S3 + R * (S1 - S3);
@@ -69,7 +65,7 @@ const CAMERA_INITIAL_POS = { x: 3, y: 3, z: 3 };
 const SPHERE_OPACITY = 1;
 const AXES_SIZE = 0.8;
 
-const SlipLinesVisualization: React.FC = () => {
+const SphereComponent: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -980,4 +976,4 @@ const ComboControl: React.FC<ComboControlProps> = ({ label, value, options, onCh
     </div>
 );
 
-export default SlipLinesVisualization;
+export default SphereComponent;
